@@ -1,12 +1,14 @@
 package flog
 
 import (
+	"context"
 	"encoding/json"
 	"io/fs"
 	"os"
 	"path"
 	"runtime"
 	"runtime/debug"
+	"strings"
 	"sync"
 	"time"
 )
@@ -26,24 +28,28 @@ const (
 	levelFetal level = "FETAL"
 )
 
+// dir, rotate, prefix
 // Logger
 type Logger struct {
-	mu   *sync.Mutex
-	file *os.File
+	mu    *sync.Mutex
+	store Store
+	ctx   context.Context
+	done  context.CancelFunc
 }
 
 // NewLogger
-func NewLogger(logDir string) (*Logger, error) {
-	if _, err := os.Stat(logDir); os.IsNotExist(err) {
-		if err := os.MkdirAll(logDir, fs.ModePerm); err != nil {
+func NewLogger(store Store) (*Logger, error) {
+	if _, err := os.Stat(dir); os.IsNotExist(err) {
+		if err := os.MkdirAll(dir, fs.ModePerm); err != nil {
 			return nil, err
 		}
 	}
 
 	// rotate log everyday
 	todaysdate := time.Now().Format(DateFormat)
-	filename := "app_" + todaysdate + ".log"
-	logPath := path.Join(logDir, filename)
+	filename := strings.Join([]string{prefix, todaysdate}, "_")
+	filename = filename + ".log"
+	logPath := path.Join(dir, filename)
 
 	// open or create log
 	log, err := os.OpenFile(logPath, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0644)
@@ -52,8 +58,9 @@ func NewLogger(logDir string) (*Logger, error) {
 	}
 
 	return &Logger{
-		mu:   &sync.Mutex{},
-		file: log,
+		mu:     &sync.Mutex{},
+		rotate: rotate,
+		file:   log,
 	}, nil
 }
 
@@ -97,7 +104,7 @@ func (l *Logger) print(level level, message string, props map[string]string) (in
 	// Lock the mutex so that no two writes to the output destination cannot happen // concurrently. If we don't do this, it's possible that the text for two or more // log entries will be intermingled in the output.
 	l.mu.Lock()
 	defer l.mu.Unlock()
-
+	l.log.file.Write()
 	// Write the log entry followed by a newline.
 	return l.file.Write(append(row, '\n'))
 }
@@ -116,6 +123,26 @@ func (l *Logger) Error(message string, props map[string]string) {
 func (l *Logger) Fetal(message string, props map[string]string) {
 	l.print(levelFetal, message, props)
 }
+
+// // rotate
+// func (l *Logger) rotate() {
+// 	tik := time.NewTicker(1 * time.Hour)
+// 	for {
+// 		select {
+// 		case <-tik.C:
+// 			// rotate log everyday
+// 			current := l.log.file.Name()
+// 			filedate := strings.TrimPrefix(current, l.log.prefix)
+// 			fileddate = strings.TrimSuffix(current, ".log")
+
+// 			date, err := time.Parse(DateFormat, filedate)
+// 			if err != nil {
+// 			}
+// 		case <-l.ctx.Done():
+// 			return
+// 		}
+// 	}
+// }
 
 // Close
 func (l *Logger) Close() {
