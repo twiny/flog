@@ -28,39 +28,43 @@ const (
 	levelFetal level = "FETAL"
 )
 
-// dir, rotate, prefix
 // Logger
 type Logger struct {
-	mu    *sync.Mutex
-	store Store
-	ctx   context.Context
-	done  context.CancelFunc
+	mu     *sync.Mutex
+	dir    string
+	prefix string
+	file   *os.File
+	rotate bool
+	timer  *time.Timer
+	ctx    context.Context
+	cancel context.CancelFunc
 }
 
 // NewLogger
-func NewLogger(store Store) (*Logger, error) {
+func NewLogger(dir, prefix string) (*Logger, error) {
 	if _, err := os.Stat(dir); os.IsNotExist(err) {
 		if err := os.MkdirAll(dir, fs.ModePerm); err != nil {
 			return nil, err
 		}
 	}
-
-	// rotate log everyday
-	todaysdate := time.Now().Format(DateFormat)
-	filename := strings.Join([]string{prefix, todaysdate}, "_")
-	filename = filename + ".log"
-	logPath := path.Join(dir, filename)
-
+	currentPath, timeLeft := generate(dir, prefix)
 	// open or create log
-	log, err := os.OpenFile(logPath, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0644)
+	log, err := os.OpenFile(currentPath, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0644)
 	if err != nil {
 		return nil, err
 	}
 
+	ctx, cancel := context.WithCancel(context.Background())
+
 	return &Logger{
 		mu:     &sync.Mutex{},
-		rotate: rotate,
+		dir:    dir,
+		prefix: prefix,
 		file:   log,
+		rotate: false,
+		timer:  time.NewTimer(timeLeft),
+		ctx:    ctx,
+		cancel: cancel,
 	}, nil
 }
 
@@ -77,6 +81,22 @@ type Log struct {
 
 // print
 func (l *Logger) print(level level, message string, props map[string]string) (int, error) {
+	// Lock the mutex so that no two writes to the output destination cannot happen // concurrently. If we don't do this, it's possible that the text for two or more // log entries will be intermingled in the output.
+	l.mu.Lock()
+	defer l.mu.Unlock()
+
+	//
+	if l.rotate {
+		currentPath, timeLeft := generate(l.dir, l.prefix)
+		//
+		log, err := os.OpenFile(currentPath, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0644)
+		if err != nil {
+			return 0, err
+		}
+		l.file = log
+		l.timer.Reset(timeLeft)
+
+	}
 	_, filename, line, _ := runtime.Caller(2)
 	// If the severity level of the log entry is below the minimum severity for the
 	// log row
@@ -101,10 +121,7 @@ func (l *Logger) print(level level, message string, props map[string]string) (in
 	if err != nil {
 		row = []byte(string(levelError) + ": unable to marshal log message:" + err.Error())
 	}
-	// Lock the mutex so that no two writes to the output destination cannot happen // concurrently. If we don't do this, it's possible that the text for two or more // log entries will be intermingled in the output.
-	l.mu.Lock()
-	defer l.mu.Unlock()
-	l.log.file.Write()
+
 	// Write the log entry followed by a newline.
 	return l.file.Write(append(row, '\n'))
 }
@@ -147,4 +164,20 @@ func (l *Logger) Fetal(message string, props map[string]string) {
 // Close
 func (l *Logger) Close() {
 	l.file.Close()
+}
+
+// generate - generate current file name and time left for tomorrow
+func generate(dir, prefix string) (string, time.Duration) {
+	now := time.Now()
+	filename := strings.Join([]string{
+		prefix,
+		now.Format(DateFormat),
+	}, "_")
+	filename = filename + ".log"
+
+	// tomorrow
+	tomorrow := time.Date(now.Year(), now.Month(), now.Day()+1, 0, 0, 0, 0, now.Location())
+	left := time.Until(tomorrow).Round(time.Minute)
+
+	return path.Join(dir, filename), left
 }

@@ -1,22 +1,34 @@
 package main
 
 import (
-	"github.com/twiny/flog"
-	"github.com/twiny/flog/stores/file"
+	"fmt"
+	"path"
+	"strings"
+	"time"
+)
+
+const (
+	DateFormat = "02-01-2006"            // dd-mm-yyyy
+	TimeFormat = "02-Jan-2006 15h04m05s" // dd-mm-yyyy hhmmss
 )
 
 func main() {
-	file, err := file.NewFile()
-	if err != nil {
-		panic(err)
-	}
-	defer file.Close()
+	p, t := GenerateNext("/tmp", "test")
+	fmt.Println(p, t)
+}
 
-	log, err := flog.NewLogger(file)
-	if err != nil {
-		panic(err)
-	}
-	defer log.Close()
+// GenerateNext
+func GenerateNext(dir, prefix string) (string, time.Duration) {
+	now := time.Now()
+	filename := strings.Join([]string{
+		prefix,
+		now.Format(DateFormat),
+	}, "_")
+	filename = filename + ".log"
 
-	log.Info("Hello world", make(map[string]string))
+	// tomorrow
+	tomorrow := time.Date(now.Year(), now.Month(), now.Day()+1, 0, 0, 0, 0, now.Location())
+	left := time.Until(tomorrow).Round(time.Minute)
+
+	return path.Join(dir, filename), left
 }
