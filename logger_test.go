@@ -8,7 +8,7 @@ import (
 func TestLogInfoWrite(t *testing.T) {
 	t.Parallel()
 
-	logger, err := NewLogger("logs", "test")
+	logger, err := NewLogger("logs", "test", 30)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -25,7 +25,7 @@ func TestLogInfoWrite(t *testing.T) {
 	}
 
 	for _, c := range cases {
-		t.Run("", func(t *testing.T) {
+		t.Run("info", func(t *testing.T) {
 			logger.Info(c.message, map[string]string{})
 		})
 	}
@@ -33,7 +33,7 @@ func TestLogInfoWrite(t *testing.T) {
 func TestLogErrorWrite(t *testing.T) {
 	t.Parallel()
 
-	logger, err := NewLogger("logs", "test")
+	logger, err := NewLogger("logs", "test", 30)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -50,15 +50,15 @@ func TestLogErrorWrite(t *testing.T) {
 	}
 
 	for _, c := range cases {
-		t.Run("", func(t *testing.T) {
+		t.Run("error", func(t *testing.T) {
 			logger.Error(c.message, map[string]string{})
 		})
 	}
 }
-func TestLogFetalWrite(t *testing.T) {
+func TestLogFatalWrite(t *testing.T) {
 	t.Parallel()
 
-	logger, err := NewLogger("logs", "test")
+	logger, err := NewLogger("logs", "test", 30)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -69,20 +69,20 @@ func TestLogFetalWrite(t *testing.T) {
 		message string
 	}{
 		{
-			name:    "test_fetal",
+			name:    "test_fatal",
 			message: "something seriously went wrong :O",
 		},
 	}
 
 	for _, c := range cases {
-		t.Run("", func(t *testing.T) {
-			logger.Fetal(c.message, map[string]string{})
+		t.Run("fatal", func(t *testing.T) {
+			logger.Fatal(c.message, map[string]string{})
 		})
 	}
 }
 
 func BenchmarkLogWrite(b *testing.B) {
-	logger, err := NewLogger("logs", "test")
+	logger, err := NewLogger("logs", "test", 30)
 	if err != nil {
 		b.Fatal(err)
 	}
@@ -95,7 +95,7 @@ func BenchmarkLogWrite(b *testing.B) {
 	}
 }
 func BenchmarkParallelLogWrite(b *testing.B) {
-	logger, err := NewLogger("logs", "test")
+	logger, err := NewLogger("logs", "test", 30)
 	if err != nil {
 		b.Fatal(err)
 	}
