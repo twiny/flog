@@ -3,6 +3,7 @@ package flog
 import (
 	"encoding/json"
 	"io/fs"
+	"io/ioutil"
 	"os"
 	"path"
 	"runtime"
@@ -71,25 +72,33 @@ type Log struct {
 }
 
 // print
-func (l *Logger) print(level level, message string, props map[string]string) (int, error) {
+func (l *Logger) print(level level, message string, props map[string]string) {
 	// Lock the mutex so that no two writes to the output destination cannot happen // concurrently. If we don't do this, it's possible that the text for two or more // log entries will be intermingled in the output.
 	l.mu.Lock()
 	defer l.mu.Unlock()
 
 	//
 	if time.Now() == l.next {
-		// close current file
-		l.file.Close()
-
 		// generate new file
 		fpath, tomorrow := generate(l.dir, l.prefix)
 
+		l.next = tomorrow
+
 		log, err := os.OpenFile(fpath, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0644)
 		if err != nil {
-			return 0, err
+			l.file.Write([]byte(err.Error() + "\n"))
+			return
 		}
+		// close current file
+		l.file.Close()
+
 		l.file = log
-		l.next = tomorrow
+
+		// remove old files
+		if err := remove(l.dir, l.prefix, 30); err != nil {
+			l.file.Write([]byte(err.Error() + "\n"))
+			return
+		}
 	}
 
 	_, filename, line, _ := runtime.Caller(2)
@@ -118,7 +127,7 @@ func (l *Logger) print(level level, message string, props map[string]string) (in
 	}
 
 	// Write the log entry followed by a newline.
-	return l.file.Write(append(row, '\n'))
+	l.file.Write(append(row, '\n'))
 }
 
 // PrintInfo
@@ -154,4 +163,22 @@ func generate(dir, prefix string) (string, time.Time) {
 	tomorrow := time.Date(now.Year(), now.Month(), now.Day()+1, 0, 0, 0, 0, now.Location())
 
 	return path.Join(dir, filename), tomorrow
+}
+
+// remove - removes log files older then 30 days
+func remove(dir, prefix string, days int) error {
+	fi, err := ioutil.ReadDir(dir)
+	if err != nil {
+		return err
+	}
+
+	for _, f := range fi {
+		if time.Since(f.ModTime()) > time.Duration(days)*24*time.Hour {
+			if err := os.Remove(path.Join(dir, f.Name())); err != nil {
+				return err
+			}
+		}
+	}
+
+	return nil
 }
