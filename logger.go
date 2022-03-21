@@ -1,7 +1,7 @@
 package flog
 
 import (
-	"encoding/json"
+	"context"
 	"io/fs"
 	"io/ioutil"
 	"os"
@@ -11,11 +11,22 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"github.com/goccy/go-json"
 )
 
+// threads
+var cores = func() int {
+	c := runtime.NumCPU()
+	if c <= 1 {
+		return 1
+	}
+	return c - 1
+}()
+
 const (
-	DateFormat = "02-01-2006"            // dd-mm-yyyy
-	TimeFormat = "02-Jan-2006 15h04m05s" // dd-mm-yyyy hhmmss
+	DateFormat = "02-01-2006" // dd-mm-yyyy
+	// TimeFormat = "02-Jan-2006 15h04m05s" // dd-mm-yyyy hhmmss
 )
 
 // Levels
@@ -28,18 +39,23 @@ const (
 	levelFatal level = "FATAL"
 )
 
+// string
+func (l level) String() string {
+	return string(l)
+}
+
 // Logger
 type Logger struct {
 	wg     *sync.WaitGroup
+	mu     *sync.Mutex
 	dir    string
 	prefix string
+	days   int         // days to keep logs
 	next   *time.Timer // timer for next rotation
 	logs   chan Log
-	days   int // days to keep logs
-	mu     *sync.Mutex
 	file   *os.File
-	// ctx    context.Context
-	// cancel context.CancelFunc
+	ctx    context.Context
+	cancel context.CancelFunc
 }
 
 // NewLogger
@@ -61,28 +77,30 @@ func NewLogger(dir, prefix string, days int) (*Logger, error) {
 	left := timeLeft(now)
 
 	// open or create log
-	log, err := os.OpenFile(fpath, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0644)
+	log, err := os.OpenFile(fpath, os.O_APPEND|os.O_CREATE|os.O_WRONLY, os.ModePerm)
 	if err != nil {
 		return nil, err
 	}
 
-	// ctx, cancel := context.WithCancel(context.Background())
+	ctx, cancel := context.WithCancel(context.Background())
 
 	logger := &Logger{
 		wg:     &sync.WaitGroup{},
 		dir:    dir,
 		prefix: prefix,
 		next:   time.NewTimer(left),
-		logs:   make(chan Log, 16),
+		logs:   make(chan Log, cores),
 		days:   days,
 		mu:     &sync.Mutex{},
 		file:   log,
-		// ctx:    ctx,
-		// cancel: cancel,
+		ctx:    ctx,
+		cancel: cancel,
 	}
 
-	logger.wg.Add(1)
-	go logger.run()
+	logger.wg.Add(cores)
+	for i := 0; i < cores; i++ {
+		go logger.run()
+	}
 
 	return logger, nil
 }
@@ -90,7 +108,7 @@ func NewLogger(dir, prefix string, days int) (*Logger, error) {
 // Log
 type Log struct {
 	Time       string            `json:"time"`
-	Level      level             `json:"level"`
+	Level      string            `json:"level"`
 	Message    string            `json:"message"`
 	Line       int               `json:"line"`
 	File       string            `json:"file"`
@@ -103,8 +121,8 @@ func newLog(level level, message string, props map[string]string) Log {
 	_, filename, line, _ := runtime.Caller(2)
 
 	log := Log{
-		Time:       time.Now().Format(TimeFormat),
-		Level:      level,
+		Time:       time.Now().Format(time.RFC3339),
+		Level:      level.String(),
 		Message:    message,
 		Line:       line,
 		File:       filename,
@@ -112,7 +130,7 @@ func newLog(level level, message string, props map[string]string) Log {
 	}
 
 	// stack trace
-	if log.Level == levelFatal {
+	if log.Level == levelFatal.String() {
 		log.Trace = string(debug.Stack())
 	}
 
@@ -121,12 +139,15 @@ func newLog(level level, message string, props map[string]string) Log {
 
 // run
 func (l *Logger) run() {
-	defer l.wg.Done()
+	defer func() {
+		l.next.Stop()
+		l.wg.Done()
+	}()
+
 	for {
 		select {
-		// case <-l.ctx.Done():
-		// 	l.next.Stop()
-		// 	return
+		case <-l.ctx.Done():
+			return
 		case now := <-l.next.C:
 			l.rotate(now)
 		case log, ok := <-l.logs:
@@ -146,7 +167,7 @@ func (l *Logger) rotate(now time.Time) {
 	fpath := logFile(now, l.dir, l.prefix)
 	left := timeLeft(now)
 
-	log, err := os.OpenFile(fpath, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0644)
+	log, err := os.OpenFile(fpath, os.O_APPEND|os.O_CREATE|os.O_WRONLY, os.ModePerm)
 	if err != nil {
 		l.logs <- newLog(levelError, "unable to open log file: "+err.Error(), nil)
 		return
@@ -197,7 +218,7 @@ func (l *Logger) Fatal(message string, props map[string]string) {
 
 // Close
 func (l *Logger) Close() {
-	// l.cancel()    // first exit run() loop
+	l.cancel()    // first exit run() loop
 	close(l.logs) // then close channel
 	l.wg.Wait()
 	l.file.Close()
