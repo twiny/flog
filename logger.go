@@ -1,19 +1,32 @@
 package flog
 
 import (
-	"encoding/json"
+	"context"
 	"io/fs"
+	"io/ioutil"
 	"os"
 	"path"
 	"runtime"
 	"runtime/debug"
+	"strings"
 	"sync"
 	"time"
+
+	"github.com/goccy/go-json"
 )
 
+// threads
+var cores = func() int {
+	c := runtime.NumCPU()
+	if c <= 1 {
+		return 1
+	}
+	return c - 1
+}()
+
 const (
-	DateFormat = "02-01-2006"            // dd-mm-yyyy
-	TimeFormat = "02-Jan-2006 15h04m05s" // dd-mm-yyyy hhmmss
+	DateFormat = "02-01-2006" // dd-mm-yyyy
+	// TimeFormat = "02-Jan-2006 15h04m05s" // dd-mm-yyyy hhmmss
 )
 
 // Levels
@@ -23,38 +36,73 @@ type level string
 const (
 	levelInfo  level = "INFO"
 	levelError level = "ERROR"
-	levelFetal level = "FETAL"
+	levelFatal level = "FATAL"
 )
+
+// string
+func (l level) String() string {
+	return string(l)
+}
 
 // Logger
 type Logger struct {
-	mu   *sync.Mutex
-	file *os.File
+	wg     *sync.WaitGroup
+	mu     *sync.Mutex
+	dir    string
+	prefix string
+	days   int         // days to keep logs
+	next   *time.Timer // timer for next rotation
+	logs   chan Log
+	file   *os.File
+	ctx    context.Context
+	cancel context.CancelFunc
 }
 
 // NewLogger
-func NewLogger(logDir string) (*Logger, error) {
-	if _, err := os.Stat(logDir); os.IsNotExist(err) {
-		if err := os.MkdirAll(logDir, fs.ModePerm); err != nil {
+func NewLogger(dir, prefix string, days int) (*Logger, error) {
+	// days must be greater than 0
+	if days < 7 {
+		days = 7
+	}
+
+	// make sure dir exists
+	if _, err := os.Stat(dir); os.IsNotExist(err) {
+		if err := os.MkdirAll(dir, fs.ModePerm); err != nil {
 			return nil, err
 		}
 	}
 
-	// rotate log everyday
-	todaysdate := time.Now().Format(DateFormat)
-	filename := "app_" + todaysdate + ".log"
-	logPath := path.Join(logDir, filename)
+	now := time.Now()
+	fpath := logFile(now, dir, prefix)
+	left := timeLeft(now)
 
 	// open or create log
-	log, err := os.OpenFile(logPath, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0644)
+	log, err := os.OpenFile(fpath, os.O_APPEND|os.O_CREATE|os.O_WRONLY, os.ModePerm)
 	if err != nil {
 		return nil, err
 	}
 
-	return &Logger{
-		mu:   &sync.Mutex{},
-		file: log,
-	}, nil
+	ctx, cancel := context.WithCancel(context.Background())
+
+	logger := &Logger{
+		wg:     &sync.WaitGroup{},
+		dir:    dir,
+		prefix: prefix,
+		next:   time.NewTimer(left),
+		logs:   make(chan Log, cores),
+		days:   days,
+		mu:     &sync.Mutex{},
+		file:   log,
+		ctx:    ctx,
+		cancel: cancel,
+	}
+
+	logger.wg.Add(cores)
+	for i := 0; i < cores; i++ {
+		go logger.run()
+	}
+
+	return logger, nil
 }
 
 // Log
@@ -68,56 +116,147 @@ type Log struct {
 	Trace      string            `json:"trace,omitempty"`
 }
 
-// print
-func (l *Logger) print(level level, message string, props map[string]string) (int, error) {
+// newLog
+func newLog(level level, message string, props map[string]string) Log {
 	_, filename, line, _ := runtime.Caller(2)
-	// If the severity level of the log entry is below the minimum severity for the
-	// log row
+
 	log := Log{
-		Time:       time.Now().UTC().Format(TimeFormat),
-		Level:      string(level),
+		Time:       time.Now().Format(time.RFC3339),
+		Level:      level.String(),
 		Message:    message,
 		Line:       line,
 		File:       filename,
 		Properties: props,
 	}
+
 	// stack trace
-	if level == levelFetal {
+	if log.Level == levelFatal.String() {
 		log.Trace = string(debug.Stack())
 	}
 
-	// Declare a line variable for holding the actual log entry text.
+	return log
+}
+
+// run
+func (l *Logger) run() {
+	defer func() {
+		l.next.Stop()
+		l.wg.Done()
+	}()
+
+	for {
+		select {
+		case <-l.ctx.Done():
+			return
+		case now := <-l.next.C:
+			l.rotate(now)
+		case log, ok := <-l.logs:
+			if !ok {
+				return
+			}
+			l.write(log)
+		}
+	}
+}
+
+// rotate
+func (l *Logger) rotate(now time.Time) {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+
+	fpath := logFile(now, l.dir, l.prefix)
+	left := timeLeft(now)
+
+	log, err := os.OpenFile(fpath, os.O_APPEND|os.O_CREATE|os.O_WRONLY, os.ModePerm)
+	if err != nil {
+		l.logs <- newLog(levelError, "unable to open log file: "+err.Error(), nil)
+		return
+	}
+
+	// close old file
+	l.file.Close()
+
+	// set new file
+	l.file = log
+	l.next.Reset(left)
+
+	if err := remove(l.dir, l.prefix, l.days); err != nil {
+		l.logs <- newLog(levelError, "unable to remove log file: "+err.Error(), nil)
+		return
+	}
+}
+
+// print
+func (l *Logger) write(log Log) {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+
 	var row []byte
-	// Marshal the anonymous struct to JSON and store it in the line variable. If there // was a problem creating the JSON, set the contents of the log entry to be that
-	// plain-text error message instead.
 	row, err := json.Marshal(log)
 	if err != nil {
 		row = []byte(string(levelError) + ": unable to marshal log message:" + err.Error())
 	}
-	// Lock the mutex so that no two writes to the output destination cannot happen // concurrently. If we don't do this, it's possible that the text for two or more // log entries will be intermingled in the output.
-	l.mu.Lock()
-	defer l.mu.Unlock()
 
 	// Write the log entry followed by a newline.
-	return l.file.Write(append(row, '\n'))
+	l.file.Write(append(row, '\n'))
 }
 
 // PrintInfo
 func (l *Logger) Info(message string, props map[string]string) {
-	l.print(levelInfo, message, props)
+	l.logs <- newLog(levelInfo, message, props)
 }
 
 // PrintError
 func (l *Logger) Error(message string, props map[string]string) {
-	l.print(levelError, message, props)
+	l.logs <- newLog(levelError, message, props)
 }
 
-// Fetal
-func (l *Logger) Fetal(message string, props map[string]string) {
-	l.print(levelFetal, message, props)
+// Fatal
+func (l *Logger) Fatal(message string, props map[string]string) {
+	l.logs <- newLog(levelFatal, message, props)
 }
 
 // Close
 func (l *Logger) Close() {
+	l.cancel()    // first exit run() loop
+	close(l.logs) // then close channel
+	l.wg.Wait()
 	l.file.Close()
+}
+
+// helper func \\
+
+// logFile - generate current file name and time left for tomorrow
+func logFile(now time.Time, dir, prefix string) string {
+	filename := strings.Join([]string{
+		prefix,
+		now.Format(DateFormat),
+	}, "_")
+	filename = filename + ".log"
+
+	return path.Join(dir, filename)
+}
+
+// timeLeft - time left for tomorrow
+func timeLeft(now time.Time) time.Duration {
+	tomorrow := time.Date(now.Year(), now.Month(), now.Day()+1, 0, 0, 0, 0, now.Location())
+	return tomorrow.Sub(now)
+}
+
+// remove - removes log files older then x days
+func remove(dir, prefix string, days int) error {
+	fi, err := ioutil.ReadDir(dir)
+	if err != nil {
+		return err
+	}
+
+	for _, f := range fi {
+		if time.Since(f.ModTime()) > time.Duration(days)*24*time.Hour {
+			if err := os.Remove(path.Join(dir, f.Name())); err != nil {
+				return err
+			}
+		}
+	}
+
+	return nil
 }

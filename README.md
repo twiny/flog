@@ -10,7 +10,7 @@ a simple logger API for Go program that save logs into a file.
 ```go
 Info(message string, props map[string]string)
 Error(message string, props map[string]string)
-Fetal(message string, props map[string]string)
+Fatal(message string, props map[string]string)
 ```
 
 ## Usage
@@ -21,7 +21,7 @@ package main
 import "github.com/twiny/flog"
 
 func main() {
-	logger, err := flog.NewLogger("./tmp/logs/")
+	logger, err := flog.NewLogger("./tmp/logs/", "test", 30)
 	if err != nil {
 		// handler error
 		return
@@ -36,7 +36,7 @@ func main() {
 		// add other info
 	})
 
-	logger.Fetal("fetal", map[string]string{
+	logger.Fatal("fatal", map[string]string{
 		// add other info
 	})
 }
@@ -46,9 +46,14 @@ func main() {
 ```
 goos: darwin
 goarch: amd64
-pkg: github.com/twiny/flogy
+pkg: github.com/twiny/flog
 cpu: Intel(R) Core(TM) i5-7360U CPU @ 2.30GHz
-BenchmarkLogWrite-4   	  173926	      6336 ns/op	    1120 B/op	      17 allocs/op
+BenchmarkLogWrite-4       134395              9049 ns/op            1128 B/op         13 allocs/op
 PASS
-ok  	github.com/twiny/flogy	1.279s
+ok      github.com/twiny/flog   2.330s
 ```
+
+test
+go test -timeout 30s -run ^TestLogInfoWrite$ github.com/twiny/flog
+go test -timeout 30s -run ^TestLogErrorWrite$ github.com/twiny/flog
+go test -timeout 30s -run ^TestLogFatalWrite$ github.com/twiny/flog
