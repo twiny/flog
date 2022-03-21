@@ -2,6 +2,7 @@ package flog
 
 import (
 	"context"
+	"encoding/json"
 	"io/fs"
 	"io/ioutil"
 	"os"
@@ -11,8 +12,6 @@ import (
 	"strings"
 	"sync"
 	"time"
-
-	"github.com/goccy/go-json"
 )
 
 // threads
@@ -26,7 +25,6 @@ var cores = func() int {
 
 const (
 	DateFormat = "02-01-2006" // dd-mm-yyyy
-	// TimeFormat = "02-Jan-2006 15h04m05s" // dd-mm-yyyy hhmmss
 )
 
 // Levels
@@ -52,7 +50,7 @@ type Logger struct {
 	prefix string
 	days   int         // days to keep logs
 	next   *time.Timer // timer for next rotation
-	logs   chan Log
+	logs   chan *Log
 	file   *os.File
 	ctx    context.Context
 	cancel context.CancelFunc
@@ -89,7 +87,7 @@ func NewLogger(dir, prefix string, days int) (*Logger, error) {
 		dir:    dir,
 		prefix: prefix,
 		next:   time.NewTimer(left),
-		logs:   make(chan Log, cores),
+		logs:   make(chan *Log, cores),
 		days:   days,
 		mu:     &sync.Mutex{},
 		file:   log,
@@ -97,10 +95,8 @@ func NewLogger(dir, prefix string, days int) (*Logger, error) {
 		cancel: cancel,
 	}
 
-	logger.wg.Add(cores)
-	for i := 0; i < cores; i++ {
-		go logger.run()
-	}
+	logger.wg.Add(1)
+	go logger.run()
 
 	return logger, nil
 }
@@ -117,7 +113,7 @@ type Log struct {
 }
 
 // newLog
-func newLog(level level, message string, props map[string]string) Log {
+func newLog(level level, message string, props map[string]string) *Log {
 	_, filename, line, _ := runtime.Caller(2)
 
 	log := Log{
@@ -134,7 +130,7 @@ func newLog(level level, message string, props map[string]string) Log {
 		log.Trace = string(debug.Stack())
 	}
 
-	return log
+	return &log
 }
 
 // run
@@ -187,7 +183,7 @@ func (l *Logger) rotate(now time.Time) {
 }
 
 // print
-func (l *Logger) write(log Log) {
+func (l *Logger) write(log *Log) {
 	l.mu.Lock()
 	defer l.mu.Unlock()
 
