@@ -53,7 +53,14 @@ PASS
 ok      github.com/twiny/flog   2.330s
 ```
 
+### Run tests
+```
 test
 go test -timeout 30s -run ^TestLogInfoWrite$ github.com/twiny/flog
 go test -timeout 30s -run ^TestLogErrorWrite$ github.com/twiny/flog
 go test -timeout 30s -run ^TestLogFatalWrite$ github.com/twiny/flog
+
+benchmark
+go test -benchmem -run=^$ -bench ^BenchmarkLogWrite$ github.com/twiny/flog
+go test -benchmem -run=^$ -bench ^BenchmarkParallelLogWrite$ github.com/twiny/flog
+```
