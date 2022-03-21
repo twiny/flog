@@ -21,7 +21,7 @@ package main
 import "github.com/twiny/flog"
 
 func main() {
-	logger, err := flog.NewLogger("./tmp/logs/", "test")
+	logger, err := flog.NewLogger("./tmp/logs/", "test", 30)
 	if err != nil {
 		// handler error
 		return
@@ -48,15 +48,12 @@ goos: darwin
 goarch: amd64
 pkg: github.com/twiny/flog
 cpu: Intel(R) Core(TM) i5-7360U CPU @ 2.30GHz
-BenchmarkLogWrite-4   	  185366	      6995 ns/op	    1120 B/op	      12 allocs/op
+BenchmarkLogWrite-4       134395              9049 ns/op            1128 B/op         13 allocs/op
 PASS
-ok  	github.com/twiny/flog	1.719s
+ok      github.com/twiny/flog   2.330s
 ```
 
 test
 go test -timeout 30s -run ^TestLogInfoWrite$ github.com/twiny/flog
 go test -timeout 30s -run ^TestLogErrorWrite$ github.com/twiny/flog
 go test -timeout 30s -run ^TestLogFatalWrite$ github.com/twiny/flog
-
-bench
-go test -benchmem -run=^$ -bench ^BenchmarkLogWrite$ github.com/twiny/flog
