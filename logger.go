@@ -45,7 +45,6 @@ func (l level) String() string {
 // Logger
 type Logger struct {
 	wg     *sync.WaitGroup
-	mu     *sync.Mutex
 	dir    string
 	prefix string
 	days   int         // days to keep logs
@@ -89,7 +88,6 @@ func NewLogger(dir, prefix string, days int) (*Logger, error) {
 		next:   time.NewTimer(left),
 		logs:   make(chan *Log, cores),
 		days:   days,
-		mu:     &sync.Mutex{},
 		file:   log,
 		ctx:    ctx,
 		cancel: cancel,
@@ -157,9 +155,6 @@ func (l *Logger) run() {
 
 // rotate
 func (l *Logger) rotate(now time.Time) {
-	l.mu.Lock()
-	defer l.mu.Unlock()
-
 	fpath := logFile(now, l.dir, l.prefix)
 	left := timeLeft(now)
 
@@ -184,9 +179,6 @@ func (l *Logger) rotate(now time.Time) {
 
 // print
 func (l *Logger) write(log *Log) {
-	l.mu.Lock()
-	defer l.mu.Unlock()
-
 	var row []byte
 	row, err := json.Marshal(log)
 	if err != nil {
