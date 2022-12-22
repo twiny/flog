@@ -8,7 +8,12 @@ import (
 func TestLogInfoWrite(t *testing.T) {
 	t.Parallel()
 
-	logger, err := NewLogger("logs", "test", 30)
+	// "logs", "test", 30
+	logger, err := NewLogger(&Config{
+		Dir:    "test_logs",
+		Prefix: "test",
+		Rotate: 30,
+	})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -26,14 +31,19 @@ func TestLogInfoWrite(t *testing.T) {
 
 	for _, c := range cases {
 		t.Run("info", func(t *testing.T) {
-			logger.Info(c.message, map[string]string{})
+			logger.Info(c.message, NewField("test", "test"))
 		})
 	}
 }
 func TestLogErrorWrite(t *testing.T) {
 	t.Parallel()
 
-	logger, err := NewLogger("logs", "test", 30)
+	// "logs", "test", 30
+	logger, err := NewLogger(&Config{
+		Dir:    "test_logs",
+		Prefix: "test",
+		Rotate: 30,
+	})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -51,14 +61,19 @@ func TestLogErrorWrite(t *testing.T) {
 
 	for _, c := range cases {
 		t.Run("error", func(t *testing.T) {
-			logger.Error(c.message, map[string]string{})
+			logger.Info(c.message, NewField("test", "test"))
 		})
 	}
 }
 func TestLogFatalWrite(t *testing.T) {
 	t.Parallel()
 
-	logger, err := NewLogger("logs", "test", 30)
+	// "logs", "test", 30
+	logger, err := NewLogger(&Config{
+		Dir:    "test_logs",
+		Prefix: "test",
+		Rotate: 30,
+	})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -76,26 +91,36 @@ func TestLogFatalWrite(t *testing.T) {
 
 	for _, c := range cases {
 		t.Run("fatal", func(t *testing.T) {
-			logger.Fatal(c.message, map[string]string{})
+			logger.Info(c.message, NewField("test", "test"))
 		})
 	}
 }
 
 func BenchmarkLogWrite(b *testing.B) {
-	logger, err := NewLogger("logs", "test", 30)
+	// "logs", "test", 30
+	logger, err := NewLogger(&Config{
+		Dir:    "test_logs",
+		Prefix: "test",
+		Rotate: 30,
+	})
 	if err != nil {
 		b.Fatal(err)
 	}
 	defer logger.Close()
 
+	n := 0
 	for i := 0; i < b.N; i++ {
-		logger.Info("benchmark", map[string]string{
-			"number": strconv.Itoa(i),
-		})
+		logger.Info("benchmark", NewField("number", strconv.Itoa(n)))
+		n++
 	}
 }
 func BenchmarkParallelLogWrite(b *testing.B) {
-	logger, err := NewLogger("logs", "test", 30)
+	// "logs", "test", 30
+	logger, err := NewLogger(&Config{
+		Dir:    "test_logs",
+		Prefix: "test",
+		Rotate: 30,
+	})
 	if err != nil {
 		b.Fatal(err)
 	}
@@ -104,9 +129,7 @@ func BenchmarkParallelLogWrite(b *testing.B) {
 	b.RunParallel(func(p *testing.PB) {
 		n := 0
 		for p.Next() {
-			logger.Info("benchmark", map[string]string{
-				"number": strconv.Itoa(n),
-			})
+			logger.Info("benchmark", NewField("number", strconv.Itoa(n)))
 			n++
 		}
 	})
