@@ -1,7 +1,6 @@
 package flog
 
 import (
-	"context"
 	"encoding/json"
 	"io/fs"
 	"os"
@@ -43,14 +42,12 @@ func (l level) String() string {
 
 // Logger
 type Logger struct {
-	wg     *sync.WaitGroup
-	conf   *Config
-	next   *time.Timer // timer for next rotation
-	logs   chan Log
-	mu     *sync.Mutex
-	file   *os.File
-	ctx    context.Context
-	cancel context.CancelFunc
+	wg   *sync.WaitGroup
+	conf *Config
+	next *time.Timer // timer for next rotation
+	logs chan Log
+	mu   *sync.Mutex
+	file *os.File
 }
 
 // NewLogger
@@ -78,17 +75,13 @@ func NewLogger(cnf *Config) (*Logger, error) {
 		return nil, err
 	}
 
-	ctx, cancel := context.WithCancel(context.Background())
-
 	logger := &Logger{
-		wg:     &sync.WaitGroup{},
-		conf:   cnf,
-		next:   time.NewTimer(left),
-		logs:   make(chan Log, cores),
-		mu:     &sync.Mutex{},
-		file:   log,
-		ctx:    ctx,
-		cancel: cancel,
+		wg:   &sync.WaitGroup{},
+		conf: cnf,
+		next: time.NewTimer(left),
+		logs: make(chan Log, cores),
+		mu:   &sync.Mutex{},
+		file: log,
 	}
 
 	logger.wg.Add(1)
@@ -153,19 +146,15 @@ func (l *Logger) run() {
 
 	for {
 		select {
-		// case <-l.ctx.Done():
-		// 	fmt.Println("ctx done")
-		// 	return
 		case now := <-l.next.C:
 			l.rotate(now)
 		case log, ok := <-l.logs:
-			// to avoid sending `nil` log
-			// on last line
+			// to avoid sending `nil`
 			if !ok {
 				return
 			}
 
-			l.write(l.ctx, log)
+			l.write(log)
 		}
 	}
 }
@@ -198,11 +187,7 @@ func (l *Logger) rotate(now time.Time) {
 }
 
 // print
-func (l *Logger) write(ctx context.Context, log Log) {
-	if ctx.Err() != nil {
-		return
-	}
-
+func (l *Logger) write(log Log) {
 	row, err := json.Marshal(log)
 	if err != nil {
 		row = []byte(string(levelError) + ": unable to marshal log message:" + err.Error())
@@ -239,7 +224,6 @@ func (l *Logger) Debug(m string, fields ...Field) {
 func (l *Logger) Close() {
 	close(l.logs)
 	l.wg.Wait()
-	l.cancel()
 	l.file.Close()
 }
 
