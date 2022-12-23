@@ -8,9 +8,9 @@ a simple logger API for Go program that save logs into a file.
 
 ## API
 ```go
-Info(message string, props map[string]string)
-Error(message string, props map[string]string)
-Fatal(message string, props map[string]string)
+Info(msg string, fields ...Field)
+Error(msg string, fields ...Field)
+Fatal(msg string, fields ...Field)
 ```
 
 ## Usage
@@ -18,27 +18,48 @@ Fatal(message string, props map[string]string)
 ```go
 package main
 
-import "github.com/twiny/flog"
+import (
+	"fmt"
 
+	"github.com/twiny/flog"
+)
+
+// main
 func main() {
-	logger, err := flog.NewLogger("./tmp/logs/", "test", 30)
+	// config
+	conf := &flog.Config{
+		Dir:    "./logs", // log directory
+		Prefix: "app",  // prefix
+		Rotate: 7, // how many days to store logs
+	}
+
+	logger, err := flog.NewLogger(conf)
 	if err != nil {
-		// handler error
+		fmt.Println(err)
 		return
 	}
 	defer logger.Close()
 
-	logger.Info("info", map[string]string{
-		// add other info
-	})
+	var x = struct {
+		Name string
+		Age  int
+		Jobs map[string]any
+	}{
+		Name: "John Doe",
+		Age:  22,
+		Jobs: map[string]any{
+			"digital marketer": 2019,
+			"golang developer": "github",
+		},
+	}
 
-	logger.Error("error", map[string]string{
-		// add other info
-	})
+	f := []flog.Field{
+		flog.NewField("hello", "world"),
+		flog.NewField("nice", 123),
+		flog.NewField("person", x),
+	}
 
-	logger.Fatal("fatal", map[string]string{
-		// add other info
-	})
+	logger.Info("from_main", f...)
 }
 ```
 
@@ -48,9 +69,9 @@ goos: darwin
 goarch: amd64
 pkg: github.com/twiny/flog
 cpu: Intel(R) Core(TM) i5-7360U CPU @ 2.30GHz
-BenchmarkLogWrite-4       134395              9049 ns/op            1128 B/op         13 allocs/op
+BenchmarkLogWrite-4       163430              6599 ns/op             718 B/op         11 allocs/op
 PASS
-ok      github.com/twiny/flog   2.330s
+ok      github.com/twiny/flog   1.320s
 ```
 
 ### Run tests
