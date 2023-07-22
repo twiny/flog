@@ -1,6 +1,7 @@
 package flog
 
 import (
+	"sync"
 	"testing"
 )
 
@@ -28,4 +29,24 @@ func TestLogRotate(t *testing.T) {
 	}
 }
 
-func BenchmarkLogWrite(b *testing.B) {}
+// go test -benchmem -v -count=1 -run=^$ -bench ^BenchmarkLogWrite$ github.com/twiny/flog -tags=integration,unit
+func BenchmarkLogWrite(b *testing.B) {
+	logger, err := NewLogger("./logs/test.log", 30, 10)
+	if err != nil {
+		b.Fatal(err)
+	}
+	defer logger.Close()
+
+	b.ResetTimer()
+	b.ReportAllocs()
+
+	var wg sync.WaitGroup
+	wg.Add(b.N)
+	for i := 0; i < b.N; i++ {
+		go func() {
+			logger.Info("hello univers :)", NewField("test", "test"))
+			wg.Done()
+		}()
+	}
+	wg.Wait()
+}

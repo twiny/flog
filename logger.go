@@ -10,6 +10,7 @@ import (
 	"path/filepath"
 	"runtime"
 	"runtime/debug"
+	"strings"
 	"sync"
 	"time"
 )
@@ -33,10 +34,11 @@ type (
 			MaxAge   int
 			Compress bool
 		}
-		logs     chan *Log
-		mu       *sync.Mutex
-		filename string
-		file     *os.File
+		logs chan *Log
+		mu   *sync.Mutex
+		path string
+		file *os.File
+		done chan struct{}
 	}
 
 	Log struct {
@@ -66,14 +68,13 @@ func NewField(name string, v any) Field {
 	}
 }
 
-func NewLogger(filename string, maxAge, maxSize int) (*Logger, error) {
-	dir := filepath.Dir(filename)
-	if err := os.MkdirAll(dir, fs.ModePerm); err != nil {
+func NewLogger(path string, maxAge, maxSize int) (*Logger, error) {
+	if err := os.MkdirAll(filepath.Dir(path), fs.ModePerm); err != nil {
 		return nil, err
 	}
 
 	// open or create log
-	log, err := os.OpenFile(filename, os.O_APPEND|os.O_CREATE|os.O_WRONLY, os.ModePerm)
+	log, err := os.OpenFile(path, os.O_APPEND|os.O_CREATE|os.O_WRONLY, os.ModePerm)
 	if err != nil {
 		return nil, fmt.Errorf("unable to open log file: %w", err)
 	}
@@ -89,10 +90,11 @@ func NewLogger(filename string, maxAge, maxSize int) (*Logger, error) {
 			MaxAge:   maxAge,
 			Compress: false,
 		},
-		logs:     make(chan *Log, 2048),
-		mu:       &sync.Mutex{},
-		filename: filename,
-		file:     log,
+		logs: make(chan *Log, 2048),
+		mu:   new(sync.Mutex),
+		path: path,
+		file: log,
+		done: make(chan struct{}, 1),
 	}
 
 	logger.wg.Add(1)
@@ -104,17 +106,40 @@ func NewLogger(filename string, maxAge, maxSize int) (*Logger, error) {
 func (l *Logger) loop() {
 	defer l.wg.Done()
 
-	for log := range l.logs {
-		if err := l.write(log); err != nil {
-			//
+	tomorrow := time.Now().AddDate(0, 0, 1)
+
+	for {
+		select {
+		case <-l.done:
+			return
+		case <-time.After(time.Until(tomorrow)):
+			l.mu.Lock()
+			if err := l.rotate(); err != nil {
+				l.logs <- l.newLog(levelError, err.Error())
+			}
+			l.mu.Unlock()
+			tomorrow = time.Now().AddDate(0, 0, 1)
+
+		case log := <-l.logs:
+			l.mu.Lock()
+			if err := l.write(log); err != nil {
+				l.logs <- l.newLog(levelError, err.Error())
+			}
+			l.mu.Unlock()
 		}
 	}
 }
-func (l *Logger) rotate() {
+func (l *Logger) rotate() error {
 	l.file.Close()
 
-	backupName := fmt.Sprintf("%s.%s", l.filename, time.Now().Format(TimeFormat))
-	os.Rename(l.filename, backupName)
+	base := filepath.Base(l.path)
+
+	parts := strings.Split(base, ".")
+	backupName := fmt.Sprintf("%s_%s.%s", parts[0], time.Now().Format(TimeFormat), parts[1])
+	backupName = filepath.Join(filepath.Dir(l.path), backupName)
+	if err := os.Rename(l.path, backupName); err != nil {
+		return fmt.Errorf("unable to rename log file: %w", err)
+	}
 
 	if l.param.Compress {
 		l.wg.Add(1)
@@ -125,25 +150,30 @@ func (l *Logger) rotate() {
 	}
 
 	var err error
-	l.file, err = os.OpenFile(l.filename, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0644)
+	l.file, err = os.OpenFile(l.path, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0644)
 	if err != nil {
-		//
+		return fmt.Errorf("unable to open log file: %w", err)
 	}
 
 	// Cleanup old logs
-	files, _ := filepath.Glob(fmt.Sprintf("%s.*", l.filename))
+	files, err := filepath.Glob(fmt.Sprintf("%s.*", l.path))
+	if err != nil {
+		return fmt.Errorf("unable to glob log files: %w", err)
+	}
+
 	for _, file := range files {
 		fi, err := os.Stat(file)
 		if err != nil {
-			//
-			continue
+			return fmt.Errorf("unable to get file info: %w", err)
 		}
 		if time.Since(fi.ModTime()).Hours() > float64(24*l.param.MaxAge) {
 			if err := os.Remove(file); err != nil {
-				//
+				return fmt.Errorf("unable to remove log file: %w", err)
 			}
 		}
 	}
+
+	return nil
 }
 func (l *Logger) write(log *Log) error {
 	fi, err := l.file.Stat()
@@ -152,7 +182,7 @@ func (l *Logger) write(log *Log) error {
 	}
 
 	// Check file size
-	if fi.Size() > l.param.MaxSize*10 {
+	if fi.Size() > l.param.MaxSize*1024*1024 {
 		l.rotate()
 	}
 
@@ -182,9 +212,9 @@ func (l *Logger) Debug(m string, fields ...Field) {
 }
 
 func (l *Logger) Close() {
-	l.wg.Wait()
+	close(l.done)
 	close(l.logs)
-
+	l.wg.Wait()
 	l.file.Close()
 }
 
