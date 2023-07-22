@@ -35,7 +35,6 @@ type (
 			Compress bool
 		}
 		logs chan *Log
-		mu   *sync.Mutex
 		path string
 		file *os.File
 		done chan struct{}
@@ -68,6 +67,10 @@ func NewField(name string, v any) Field {
 	}
 }
 
+// NewLogger creates a new logger instance
+// path: path to log file
+// maxAge: max age of log file in days
+// maxSize: max size of log file in mb
 func NewLogger(path string, maxAge, maxSize int) (*Logger, error) {
 	if err := os.MkdirAll(filepath.Dir(path), fs.ModePerm); err != nil {
 		return nil, err
@@ -88,10 +91,9 @@ func NewLogger(path string, maxAge, maxSize int) (*Logger, error) {
 		}{
 			MaxSize:  int64(maxSize),
 			MaxAge:   maxAge,
-			Compress: false,
+			Compress: true,
 		},
-		logs: make(chan *Log, 2048),
-		mu:   new(sync.Mutex),
+		logs: make(chan *Log, 4096),
 		path: path,
 		file: log,
 		done: make(chan struct{}, 1),
@@ -113,19 +115,15 @@ func (l *Logger) loop() {
 		case <-l.done:
 			return
 		case <-time.After(time.Until(tomorrow)):
-			l.mu.Lock()
 			if err := l.rotate(); err != nil {
 				l.logs <- l.newLog(levelError, err.Error())
 			}
-			l.mu.Unlock()
 			tomorrow = time.Now().AddDate(0, 0, 1)
 
 		case log := <-l.logs:
-			l.mu.Lock()
 			if err := l.write(log); err != nil {
 				l.logs <- l.newLog(levelError, err.Error())
 			}
-			l.mu.Unlock()
 		}
 	}
 }
@@ -145,7 +143,9 @@ func (l *Logger) rotate() error {
 		l.wg.Add(1)
 		go func() {
 			defer l.wg.Done()
-			compressLog(backupName)
+			if err := compressLog(backupName); err != nil {
+				l.logs <- l.newLog(levelError, err.Error())
+			}
 		}()
 	}
 
@@ -253,23 +253,29 @@ func (l *Logger) newLog(level level, msg string, fields ...Field) *Log {
 	return log
 }
 
-func compressLog(filename string) {
+func compressLog(filename string) error {
 	inputFile, err := os.Open(filename)
 	if err != nil {
-		return
+		return fmt.Errorf("unable to open log file: %w", err)
 	}
 	defer inputFile.Close()
 
 	outputFile, err := os.Create(filename + ".gz")
 	if err != nil {
-		return
+		return fmt.Errorf("unable to create compressed log file: %w", err)
 	}
 	defer outputFile.Close()
 
 	writer := gzip.NewWriter(outputFile)
 	defer writer.Close()
 
-	io.Copy(writer, inputFile)
+	if _, err = io.Copy(writer, inputFile); err != nil {
+		return fmt.Errorf("unable to copy log file: %w", err)
+	}
 
-	os.Remove(filename)
+	if err := os.Remove(filename); err != nil {
+		return fmt.Errorf("unable to remove log file: %w", err)
+	}
+
+	return nil
 }

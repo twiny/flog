@@ -15,8 +15,6 @@ func TestLogWrite(t *testing.T) {
 	logger.Info("hello univers :)", NewField("test", "test"))
 	logger.Error("something went wrong :(", NewField("test", "test"))
 }
-
-// go test -count=1 -v -timeout 30s -run ^TestLogRotate$ github.com/twiny/flog -tags=integration,unit
 func TestLogRotate(t *testing.T) {
 	logger, err := NewLogger("./logs/test.log", 1, 1)
 	if err != nil {
@@ -28,14 +26,31 @@ func TestLogRotate(t *testing.T) {
 		logger.Info("hello univers :)", NewField("test", "test"))
 	}
 }
-
-// go test -benchmem -v -count=1 -run=^$ -bench ^BenchmarkLogWrite$ github.com/twiny/flog -tags=integration,unit
 func BenchmarkLogWrite(b *testing.B) {
 	logger, err := NewLogger("./logs/test.log", 30, 10)
 	if err != nil {
 		b.Fatal(err)
 	}
 	defer logger.Close()
+
+	var x = struct {
+		Name string
+		Age  int
+		Jobs map[string]any
+	}{
+		Name: "John Doe",
+		Age:  22,
+		Jobs: map[string]any{
+			"digital marketer": 2019,
+			"golang developer": "github",
+		},
+	}
+
+	f := []Field{
+		NewField("hello", "world"),
+		NewField("nice", 123),
+		NewField("person", x),
+	}
 
 	b.ResetTimer()
 	b.ReportAllocs()
@@ -44,7 +59,7 @@ func BenchmarkLogWrite(b *testing.B) {
 	wg.Add(b.N)
 	for i := 0; i < b.N; i++ {
 		go func() {
-			logger.Info("hello univers :)", NewField("test", "test"))
+			logger.Info("from_main", f...)
 			wg.Done()
 		}()
 	}
